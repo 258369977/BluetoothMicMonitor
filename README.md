@@ -102,7 +102,3 @@ BluetoothMicMonitor/
 - **C# 5 兼容**：代码兼容 .NET Framework 4.8 的 C# 5 编译器，无 NuGet 依赖
 - **无托盘模式**：`--minimized` 启动时纯后台运行，使用命名 Mutex 实现单实例控制——手动启动时自动接管已有静默实例
 - **开机自启**：借助 `schtasks /sc onlogon /rl highest` 创建计划任务，登录时以最高权限无 UAC 弹窗启动
-
-## License
-
-MIT
