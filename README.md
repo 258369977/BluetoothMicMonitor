@@ -1,4 +1,4 @@
-# BluetoothMicMonitor[README.md](https://github.com/user-attachments/files/29435377/README.md)
+# [README.md](https://github.com/user-attachments/files/29435377/README.md)
 
 蓝牙耳机免提通道自动切换工具。当指定程序（如游戏、QQ、微信等）启动时自动禁用蓝牙耳机的 Hands-Free 通道，恢复高清音频；程序退出后自动恢复。
 
