@@ -68,6 +68,13 @@ namespace BluetoothMicMonitor
             ref SP_PROPCHANGE_PARAMS ClassInstallParams,
             uint ClassInstallParamsSize);
 
+        [DllImport("setupapi.dll")]
+        private static extern int CM_Get_DevNode_Status(
+            out uint pulStatus, out uint pulProblemNumber,
+            uint dnDevInst, uint ulFlags);
+
+        private const uint DN_STARTED = 0x00000008;
+
         [DllImport("setupapi.dll", SetLastError = true)]
         private static extern bool SetupDiCallClassInstaller(
             uint InstallFunction, IntPtr DeviceInfoSet, ref SP_DEVINFO_DATA DeviceInfoData);
@@ -142,6 +149,56 @@ namespace BluetoothMicMonitor
                 return false;
             }
             finally { SetupDiDestroyDeviceInfoList(hDevInfo); }
+        }
+
+        public static bool IsDeviceEnabled(string friendlyName)
+        {
+            var guid = MediaClassGuid;
+            var hDevInfo = SetupDiGetClassDevs(ref guid, null, IntPtr.Zero, DIGCF_PRESENT);
+            if (hDevInfo == IntPtr.Zero || hDevInfo == unchecked((IntPtr)(-1)))
+                return true;
+
+            try
+            {
+                var di = default(SP_DEVINFO_DATA);
+                di.cbSize = (uint)Marshal.SizeOf(typeof(SP_DEVINFO_DATA));
+                uint idx = 0;
+
+                while (SetupDiEnumDeviceInfo(hDevInfo, idx, ref di))
+                {
+                    uint sz = 0;
+                    uint rdt = 0;
+                    SetupDiGetDeviceRegistryProperty(hDevInfo, ref di, SPDRP_FRIENDLYNAME,
+                        out rdt, IntPtr.Zero, 0, out sz);
+
+                    if (sz > 0)
+                    {
+                        var buf = Marshal.AllocHGlobal((int)sz);
+                        try
+                        {
+                            uint rdt2 = 0;
+                            if (SetupDiGetDeviceRegistryProperty(hDevInfo, ref di, SPDRP_FRIENDLYNAME,
+                                out rdt2, buf, sz, out sz))
+                            {
+                                var name = Marshal.PtrToStringUni(buf);
+                                if (name != null && name.Equals(friendlyName, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    uint status = 0;
+                                    uint problem = 0;
+                                    int cr = CM_Get_DevNode_Status(out status, out problem, di.DevInst, 0);
+                                    return cr == 0 && (status & DN_STARTED) != 0;
+                                }
+                            }
+                        }
+                        finally { Marshal.FreeHGlobal(buf); }
+                    }
+                    idx++;
+                    di = default(SP_DEVINFO_DATA);
+                    di.cbSize = (uint)Marshal.SizeOf(typeof(SP_DEVINFO_DATA));
+                }
+            }
+            finally { SetupDiDestroyDeviceInfoList(hDevInfo); }
+            return true;
         }
 
         public static List<string> EnumerateMediaDevices()

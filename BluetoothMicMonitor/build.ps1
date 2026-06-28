@@ -25,8 +25,11 @@ $result = & $csc /target:winexe /langversion:5 /win32manifest:app.manifest /out:
 if ($LASTEXITCODE -eq 0) {
     $exe = Get-Item BluetoothMicMonitor.exe
     Copy-Item BluetoothMicMonitor.exe "$PSScriptRoot\..\BluetoothMicMonitor.exe" -Force
-    Write-Host "BUILD SUCCEEDED: $($exe.Length) bytes (manifest embedded)" -ForegroundColor Green
-    Write-Host "Run: right-click -> Run as Administrator" -ForegroundColor Cyan
+    Write-Host "BUILD SUCCEEDED: $($exe.Length) bytes (manifest embedded, silent mode)" -ForegroundColor Green
+    Write-Host "Usage:" -ForegroundColor White
+    Write-Host "  Normal:   BluetoothMicMonitor.exe" -ForegroundColor Gray
+    Write-Host "  Silent:   BluetoothMicMonitor.exe --minimized" -ForegroundColor Gray
+    Write-Host "  Auto-start uses silent mode (no tray, no window)" -ForegroundColor Gray
 } else {
     $errors = @($result | Where-Object { $_ -match 'error CS' }).Count
     Write-Host "FAILED: $errors errors" -ForegroundColor Red

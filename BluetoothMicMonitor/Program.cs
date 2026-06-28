@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Security.Principal;
+using System.Threading;
 using System.Windows;
 
 namespace BluetoothMicMonitor
@@ -15,13 +16,39 @@ namespace BluetoothMicMonitor
         private static MainWindow _mainWindow;
         private static AppConfig _config = new AppConfig();
         private static bool _monitorRunning;
+        private static Mutex _mutex;
+
+        private const string MutexName = "BluetoothMicMonitor_SingleInstance";
+        private const string ProcessName = "BluetoothMicMonitor";
 
         [STAThread]
         public static void Main(string[] args)
         {
             var startMinimized = args.Length > 0 && args[0].Equals("--minimized", StringComparison.OrdinalIgnoreCase);
 
-            // Admin check: elevate if needed (only prompt UAC when NOT in minimized mode)
+            // --- Single-instance check (before admin check) ---
+            bool createdNew;
+            _mutex = new Mutex(true, MutexName, out createdNew);
+
+            if (!createdNew)
+            {
+                // Another instance is running.
+                if (startMinimized)
+                {
+                    // Silent daemon: another instance already running, just exit silently
+                    return;
+                }
+                else
+                {
+                    // Manual launch: kill existing silent daemon, then restart with full UI
+                    KillExistingInstance();
+                    // Retry acquiring mutex
+                    _mutex.Close();
+                    _mutex = new Mutex(true, MutexName, out createdNew);
+                }
+            }
+
+            // --- Admin check ---
             using (var identity = WindowsIdentity.GetCurrent())
             {
                 var principal = new WindowsPrincipal(identity);
@@ -29,7 +56,6 @@ namespace BluetoothMicMonitor
                 {
                     if (!startMinimized)
                     {
-                        // Manual launch: auto-elevate via UAC (prompts once)
                         var exePath = System.Reflection.Assembly.GetEntryAssembly() != null
                             ? System.Reflection.Assembly.GetEntryAssembly().Location : "";
                         if (!string.IsNullOrEmpty(exePath))
@@ -40,13 +66,13 @@ namespace BluetoothMicMonitor
                     }
                     else
                     {
-                        // Auto-start via scheduled task (which runs with highest privileges).
-                        // If we somehow are not admin here, silently exit to avoid UAC popup.
-                        Logger.Initialize(Path.Combine(Environment.GetFolderPath(
+                        var silentLogDir = Path.Combine(Environment.GetFolderPath(
                             Environment.SpecialFolder.LocalApplicationData),
-                            "BluetoothMicMonitor", "logs"));
-                        Logger.Warn("Not running as admin in minimized mode — exiting.");
+                            "BluetoothMicMonitor", "logs");
+                        Logger.Initialize(silentLogDir);
+                        Logger.Warn("Not admin in minimized mode - exiting.");
                     }
+                    _mutex.Close();
                     return;
                 }
             }
@@ -55,12 +81,27 @@ namespace BluetoothMicMonitor
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "BluetoothMicMonitor", "logs");
             Logger.Initialize(logDir);
-            Logger.Info("=== BluetoothMicMonitor starting " + (startMinimized ? "(minimized)" : "(normal)") + " ===");
+            Logger.Info("=== BluetoothMicMonitor starting " + (startMinimized ? "(silent)" : "(normal)") + " ===");
 
             _worker = new DeviceWorker(_eventBus);
             _watcher = new ProcessWatcher(_eventBus);
             _config = ConfigManager.Load();
 
+            if (startMinimized)
+            {
+                // === SILENT MODE: no tray, no window, daemon only ===
+                Logger.Info("Silent mode - no tray, no window.");
+                if (_config.AutoStart || startMinimized)
+                    StartDaemon(_config);
+
+                // Block forever until process is killed externally
+                // (the daemon runs on background threads)
+                var waitHandle = new ManualResetEvent(false);
+                waitHandle.WaitOne();
+                return;
+            }
+
+            // === NORMAL MODE: tray + window ===
             _tray = new TrayService();
             _tray.OpenRequested += OnOpenPanel;
             _tray.LogsRequested += OnViewLogs;
@@ -69,8 +110,7 @@ namespace BluetoothMicMonitor
             _tray.AutoStartChecked = ConfigManager.IsAutoStartEnabled();
             _tray.Show();
 
-            // In minimized mode (auto-start): start daemon immediately, no GUI window
-            if (_config.AutoStart || startMinimized)
+            if (_config.AutoStart)
                 StartDaemon(_config);
 
             _tray.Running = _monitorRunning;
@@ -81,12 +121,35 @@ namespace BluetoothMicMonitor
             _mainWindow = new MainWindow();
             _mainWindow.Closing += (sender, e) => { e.Cancel = true; _mainWindow.Hide(); };
 
-            // Only show window when NOT in minimized mode
-            if (!startMinimized)
-                _mainWindow.Show();
-
-            Logger.Info("Application running (window=" + (!startMinimized) + ").");
+            _mainWindow.Show();
+            Logger.Info("Application running (normal mode).");
             app.Run();
+        }
+
+        private static void KillExistingInstance()
+        {
+            try
+            {
+                var procs = Process.GetProcessesByName(ProcessName);
+                foreach (var p in procs)
+                {
+                    // Don't kill ourselves
+                    if (p.Id != Process.GetCurrentProcess().Id)
+                    {
+                        Logger.Initialize(Path.Combine(Environment.GetFolderPath(
+                            Environment.SpecialFolder.LocalApplicationData),
+                            "BluetoothMicMonitor", "logs"));
+                        Logger.Info("Killing existing silent instance (PID " + p.Id + ")...");
+                        p.Kill();
+                        p.WaitForExit(3000);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Best effort - if we can't kill, continue anyway
+                Logger.Warn("Could not kill existing instance: " + ex.Message);
+            }
         }
 
         private static void OnOpenPanel()
@@ -97,12 +160,12 @@ namespace BluetoothMicMonitor
 
         private static void OnViewLogs()
         {
-            var logDir = Path.Combine(
+            var dir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "BluetoothMicMonitor", "logs");
-            if (Directory.Exists(logDir))
+            if (Directory.Exists(dir))
             {
-                try { Process.Start("explorer.exe", logDir); }
+                try { Process.Start("explorer.exe", dir); }
                 catch (Exception ex) { Logger.Error("Cannot open logs: " + ex.Message); }
             }
         }
@@ -116,6 +179,7 @@ namespace BluetoothMicMonitor
         {
             StopDaemon();
             if (_tray != null) _tray.Hide();
+            if (_mutex != null) { _mutex.Close(); _mutex = null; }
             Application.Current.Shutdown();
         }
 

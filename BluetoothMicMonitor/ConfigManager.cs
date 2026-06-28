@@ -124,7 +124,7 @@ namespace BluetoothMicMonitor
                 if (enable)
                 {
                     string exePath = GetExePath();
-                    string args = "/create /tn \"" + TaskName + "\" /tr \"\\\"" + exePath + "\\\" --minimized\" /sc onlogon /rl highest /f";
+                    string args = "/create /tn \"" + TaskName + "\" /tr \"cmd /c start /min \\\"\\\" \\\"" + exePath + "\\\" --minimized\" /sc onlogon /rl highest /f";
                     var psi = new ProcessStartInfo("schtasks.exe", args)
                     {
                         WindowStyle = ProcessWindowStyle.Hidden,

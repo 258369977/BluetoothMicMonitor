@@ -19,7 +19,10 @@ public class MainWindow : Window
     private Button _btnStartStop;
     private Button _btnInstall;
     private Button _btnSave;
-    private Button _btnUninstall;
+        private Button _btnUninstall;
+    private Button _btnToggleDevice;
+    private Ellipse _deviceStatusDot;
+    private TextBlock _deviceStatusLabel;
     private bool _isRunning;
 
     public MainWindow()
@@ -188,11 +191,17 @@ public class MainWindow : Window
     private Grid MakeDevicePanel()
     {
         var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        grid.Children.Add(new TextBlock
+        // Row 0: device name input row
+        var row0 = new Grid { Margin = new Thickness(0) };
+        row0.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row0.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row0.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row0.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        row0.Children.Add(new TextBlock
         {
             Text = "设备名称:", VerticalAlignment = VerticalAlignment.Center,
             FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55)),
@@ -206,7 +215,7 @@ public class MainWindow : Window
             Padding = new Thickness(6, 0, 6, 0)
         };
         Grid.SetColumn(_txtDevice, 1);
-        grid.Children.Add(_txtDevice);
+        row0.Children.Add(_txtDevice);
 
         var btnScan = new Button
         {
@@ -218,7 +227,46 @@ public class MainWindow : Window
         };
         btnScan.Click += OnScan;
         Grid.SetColumn(btnScan, 2);
-        grid.Children.Add(btnScan);
+        row0.Children.Add(btnScan);
+
+        _btnToggleDevice = new Button
+        {
+            Content = "切换", Width = 56, Height = 28, FontSize = 11,
+            Margin = new Thickness(4, 0, 0, 0), Background = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0xC0, 0xC0, 0xC0)),
+            BorderThickness = new Thickness(1),
+            Cursor = System.Windows.Input.Cursors.Hand
+        };
+        _btnToggleDevice.Click += OnToggleDevice;
+        Grid.SetColumn(_btnToggleDevice, 3);
+        row0.Children.Add(_btnToggleDevice);
+
+        Grid.SetRow(row0, 0);
+        grid.Children.Add(row0);
+
+        // Row 1: device status indicator
+        var statusRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 6, 0, 0)
+        };
+        _deviceStatusDot = new Ellipse
+        {
+            Width = 8, Height = 8,
+            Margin = new Thickness(0, 0, 6, 0),
+            Fill = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC)),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        statusRow.Children.Add(_deviceStatusDot);
+        _deviceStatusLabel = new TextBlock
+        {
+            Text = "未知", FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        statusRow.Children.Add(_deviceStatusLabel);
+        Grid.SetRow(statusRow, 1);
+        grid.Children.Add(statusRow);
 
         return grid;
     }
@@ -291,6 +339,7 @@ public class MainWindow : Window
             _listProcs.Items.Add(p);
         _chkAutoStart.IsChecked = cfg.AutoStart || ConfigManager.IsAutoStartEnabled();
         _isRunning = Program.IsMonitorRunning();
+        RefreshDeviceStatus();
     }
 
     private void BindEvents()
@@ -324,6 +373,65 @@ public class MainWindow : Window
         UpdateUI();
     }
 
+    private void OnToggleDevice(object sender, RoutedEventArgs e)
+    {
+        var btn = (Button)sender;
+        btn.IsEnabled = false;
+        try
+        {
+            var devName = _txtDevice.Text.Trim();
+            if (string.IsNullOrWhiteSpace(devName))
+            {
+                MessageBox.Show("请先输入设备名称。", "提示",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            bool isEnabled = SetupApi.IsDeviceEnabled(devName);
+            string err;
+            if (SetupApi.SetDeviceState(devName, !isEnabled, out err))
+            {
+                RefreshDeviceStatus();
+            }
+            else
+            {
+                MessageBox.Show("操作失败: " + err, "错误",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("操作失败: " + ex.Message, "错误",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally { btn.IsEnabled = true; }
+    }
+
+    private void RefreshDeviceStatus()
+    {
+        var devName = _txtDevice.Text.Trim();
+        if (string.IsNullOrWhiteSpace(devName))
+        {
+            _deviceStatusDot.Fill = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC));
+            _deviceStatusLabel.Text = "未设置";
+            _btnToggleDevice.IsEnabled = false;
+            return;
+        }
+        bool enabled = SetupApi.IsDeviceEnabled(devName);
+        _btnToggleDevice.IsEnabled = true;
+        if (enabled)
+        {
+            _deviceStatusDot.Fill = new SolidColorBrush(Color.FromRgb(0x22, 0xBB, 0x55));
+            _deviceStatusLabel.Text = "已启用";
+            _btnToggleDevice.Content = "禁用";
+        }
+        else
+        {
+            _deviceStatusDot.Fill = new SolidColorBrush(Color.FromRgb(0xE8, 0x11, 0x23));
+            _deviceStatusLabel.Text = "已禁用";
+            _btnToggleDevice.Content = "启用";
+        }
+    }
+
     private void OnScan(object sender, RoutedEventArgs e)
     {
         var btn = (Button)sender; btn.IsEnabled = false; btn.Content = "...";
@@ -332,7 +440,7 @@ public class MainWindow : Window
             var devices = SetupApi.EnumerateMediaDevices();
             if (devices.Count == 0) { MessageBox.Show("未找到 MEDIA 类设备。", "扫描结果", MessageBoxButton.OK, MessageBoxImage.Information); return; }
             var dlg = new ScanDialog(devices); dlg.Owner = this;
-            if (dlg.ShowDialog() == true && dlg.SelectedDevice != null) _txtDevice.Text = dlg.SelectedDevice;
+            if (dlg.ShowDialog() == true && dlg.SelectedDevice != null) { _txtDevice.Text = dlg.SelectedDevice; RefreshDeviceStatus(); }
         }
         catch (Exception ex) { MessageBox.Show("扫描失败: " + ex.Message, "Error", MessageBoxButton.OK, MessageBoxImage.Error); }
         finally { btn.IsEnabled = true; btn.Content = "扫描"; }
@@ -382,6 +490,7 @@ public class MainWindow : Window
     private void UpdateUI()
     {
         _isRunning = Program.IsMonitorRunning();
+        RefreshDeviceStatus();
         if (_isRunning)
         {
             _statusIndicator.Fill = new SolidColorBrush(Color.FromRgb(0x22, 0xBB, 0x55));
