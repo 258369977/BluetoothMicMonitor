@@ -14,8 +14,7 @@
 
 > 运行后系统托盘会出现图标，双击打开设置面板。
 
-<img width="817" height="709" alt="image" src="https://github.com/user-attachments/assets/7eb5bbb6-c5cb-4b07-aaac-fbd4cdedc6e8" >
-
+<img width="813" height="707" alt="image" src="https://github.com/user-attachments/assets/b6c166e5-e8a1-4785-98e0-223b62c0f24c" />
 
 ## 构建
 
