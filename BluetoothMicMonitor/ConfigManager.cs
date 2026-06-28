@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.Serialization.Json;
-using Microsoft.Win32;
 
 namespace BluetoothMicMonitor
 {
@@ -33,12 +33,19 @@ namespace BluetoothMicMonitor
     public static class ConfigManager
     {
         private const string AppName = "BluetoothMicMonitor";
+        private const string TaskName = "BluetoothMicMonitor";
         private static readonly string ConfigDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), AppName);
         private static readonly string ConfigPath = Path.Combine(ConfigDir, "config.json");
-        private const string RunKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
 
         public static string ConfigDirectory { get { return ConfigDir; } }
+
+        private static string GetExePath()
+        {
+            var asm = System.Reflection.Assembly.GetEntryAssembly();
+            if (asm != null) return asm.Location;
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, AppName + ".exe");
+        }
 
         public static AppConfig Load()
         {
@@ -92,11 +99,20 @@ namespace BluetoothMicMonitor
         {
             try
             {
-                RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKeyPath, false);
-                if (key == null) return false;
-                object val = key.GetValue(AppName);
-                key.Close();
-                return val != null;
+                var psi = new ProcessStartInfo("schtasks.exe", "/query /tn \"" + TaskName + "\"")
+                {
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true
+                };
+                using (var p = Process.Start(psi))
+                {
+                    if (p == null) return false;
+                    string output = p.StandardOutput.ReadToEnd();
+                    p.WaitForExit(5000);
+                    return p.ExitCode == 0 && !output.Contains("ERROR:");
+                }
             }
             catch { return false; }
         }
@@ -105,24 +121,46 @@ namespace BluetoothMicMonitor
         {
             try
             {
-                RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKeyPath, true);
-                if (key == null) { Logger.Error("Cannot open registry Run key."); return; }
                 if (enable)
                 {
-                    string exePath = System.Reflection.Assembly.GetEntryAssembly() != null
-                        ? System.Reflection.Assembly.GetEntryAssembly().Location
-                        : AppName + ".exe";
-                    key.SetValue(AppName, "\"" + exePath + "\" --minimized");
-                    Logger.Info("Auto-start enabled (Registry).");
+                    string exePath = GetExePath();
+                    string args = "/create /tn \"" + TaskName + "\" /tr \"\\\"" + exePath + "\\\" --minimized\" /sc onlogon /rl highest /f";
+                    var psi = new ProcessStartInfo("schtasks.exe", args)
+                    {
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        CreateNoWindow = true,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true
+                    };
+                    using (var p = Process.Start(psi))
+                    {
+                        if (p == null) return;
+                        string output = p.StandardOutput.ReadToEnd();
+                        p.WaitForExit(10000);
+                        if (p.ExitCode == 0)
+                            Logger.Info("Scheduled task created (auto-start enabled).");
+                        else
+                            Logger.Error("schtasks create failed: " + output);
+                    }
                 }
                 else
                 {
-                    key.DeleteValue(AppName, false);
-                    Logger.Info("Auto-start disabled (Registry).");
+                    var psi = new ProcessStartInfo("schtasks.exe", "/delete /tn \"" + TaskName + "\" /f")
+                    {
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        CreateNoWindow = true,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true
+                    };
+                    using (var p = Process.Start(psi))
+                    {
+                        if (p == null) return;
+                        p.WaitForExit(5000);
+                        Logger.Info("Scheduled task removed (auto-start disabled).");
+                    }
                 }
-                key.Close();
             }
-            catch (Exception ex) { Logger.Error("Auto-start registry failed: " + ex.Message); }
+            catch (Exception ex) { Logger.Error("Auto-start operation failed: " + ex.Message); }
         }
 
         [System.Runtime.Serialization.DataContract]

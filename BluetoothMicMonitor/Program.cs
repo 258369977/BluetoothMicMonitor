@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Diagnostics;
 using System.IO;
 using System.Security.Principal;
 using System.Windows;
@@ -18,21 +19,33 @@ namespace BluetoothMicMonitor
         [STAThread]
         public static void Main(string[] args)
         {
+            var startMinimized = args.Length > 0 && args[0].Equals("--minimized", StringComparison.OrdinalIgnoreCase);
+
+            // Admin check: elevate if needed (only prompt UAC when NOT in minimized mode)
             using (var identity = WindowsIdentity.GetCurrent())
             {
                 var principal = new WindowsPrincipal(identity);
                 if (!principal.IsInRole(WindowsBuiltInRole.Administrator))
                 {
-                    var exePath = System.Reflection.Assembly.GetEntryAssembly() != null ? System.Reflection.Assembly.GetEntryAssembly().Location : "";
-                    if (!string.IsNullOrEmpty(exePath))
+                    if (!startMinimized)
                     {
-                        var psi = new System.Diagnostics.ProcessStartInfo
+                        // Manual launch: auto-elevate via UAC (prompts once)
+                        var exePath = System.Reflection.Assembly.GetEntryAssembly() != null
+                            ? System.Reflection.Assembly.GetEntryAssembly().Location : "";
+                        if (!string.IsNullOrEmpty(exePath))
                         {
-                            FileName = exePath,
-                            UseShellExecute = true,
-                            Verb = "RunAs"
-                        };
-                        try { System.Diagnostics.Process.Start(psi); } catch { }
+                            try { Process.Start(new ProcessStartInfo { FileName = exePath, UseShellExecute = true, Verb = "RunAs" }); }
+                            catch { }
+                        }
+                    }
+                    else
+                    {
+                        // Auto-start via scheduled task (which runs with highest privileges).
+                        // If we somehow are not admin here, silently exit to avoid UAC popup.
+                        Logger.Initialize(Path.Combine(Environment.GetFolderPath(
+                            Environment.SpecialFolder.LocalApplicationData),
+                            "BluetoothMicMonitor", "logs"));
+                        Logger.Warn("Not running as admin in minimized mode — exiting.");
                     }
                     return;
                 }
@@ -42,7 +55,7 @@ namespace BluetoothMicMonitor
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "BluetoothMicMonitor", "logs");
             Logger.Initialize(logDir);
-            Logger.Info("=== BluetoothMicMonitor starting ===");
+            Logger.Info("=== BluetoothMicMonitor starting " + (startMinimized ? "(minimized)" : "(normal)") + " ===");
 
             _worker = new DeviceWorker(_eventBus);
             _watcher = new ProcessWatcher(_eventBus);
@@ -56,12 +69,9 @@ namespace BluetoothMicMonitor
             _tray.AutoStartChecked = ConfigManager.IsAutoStartEnabled();
             _tray.Show();
 
-            var startMinimized = args.Length > 0 && args[0].Equals("--minimized", StringComparison.OrdinalIgnoreCase);
-
+            // In minimized mode (auto-start): start daemon immediately, no GUI window
             if (_config.AutoStart || startMinimized)
-            {
                 StartDaemon(_config);
-            }
 
             _tray.Running = _monitorRunning;
 
@@ -71,15 +81,18 @@ namespace BluetoothMicMonitor
             _mainWindow = new MainWindow();
             _mainWindow.Closing += (sender, e) => { e.Cancel = true; _mainWindow.Hide(); };
 
+            // Only show window when NOT in minimized mode
             if (!startMinimized)
                 _mainWindow.Show();
 
+            Logger.Info("Application running (window=" + (!startMinimized) + ").");
             app.Run();
         }
 
         private static void OnOpenPanel()
         {
-            _mainWindow.Dispatcher.Invoke(new Action(() => { _mainWindow.Show(); _mainWindow.Activate(); }));
+            if (_mainWindow != null)
+                _mainWindow.Dispatcher.Invoke(new Action(() => { _mainWindow.Show(); _mainWindow.Activate(); }));
         }
 
         private static void OnViewLogs()
@@ -89,7 +102,7 @@ namespace BluetoothMicMonitor
                 "BluetoothMicMonitor", "logs");
             if (Directory.Exists(logDir))
             {
-                try { System.Diagnostics.Process.Start("explorer.exe", logDir); }
+                try { Process.Start("explorer.exe", logDir); }
                 catch (Exception ex) { Logger.Error("Cannot open logs: " + ex.Message); }
             }
         }
